@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="cs"><head><meta charset="utf-8">
+<title>Auction Sim — Živý pohled</title>
+<style>
+ body{font-family:system-ui,sans-serif;max-width:860px;margin:2rem auto;padding:0 1rem}
+ h1{border-bottom:2px solid #eee;padding-bottom:.3rem}
+ #status{font-weight:600;padding:.3rem .6rem;border-radius:6px;background:#fef3c7;display:inline-block}
+ #status.done{background:#d1fae5}
+ #feed{height:420px;overflow:auto;border:1px solid #ddd;border-radius:6px;padding:.5rem;font-size:.85rem;background:#fafafa}
+ .ev{padding:.25rem .4rem;border-bottom:1px solid #eee}
+ .ev .t{color:#2563eb;font-weight:600}
+ a.btn{display:inline-block;margin-top:1rem;padding:.5rem 1rem;background:#2563eb;color:#fff;border-radius:6px;text-decoration:none}
+</style></head><body>
+<h1>{{.Name}}</h1>
+<p>Simulace <code>{{.ID}}</code> — <span id="status">RUNNING…</span></p>
+<div id="reportLink"></div>
+<h2>Živý stream událostí</h2>
+<div id="feed"></div>
+
+<script>
+const id = "{{.ID}}";
+const feed = document.getElementById('feed');
+const es = new EventSource('/api/v1/auctions/'+id+'/events');
+function add(type, data){
+  const d = document.createElement('div'); d.className='ev';
+  d.innerHTML = '<span class="t">'+type+'</span> '+JSON.stringify(data);
+  feed.prepend(d);
+}
+['auction_started','price_updated','bid_placed','timer_update','leader_changed','bidder_left',
+ 'entry_credit','countdown_extended','buy_now','no_sale','auction_ended','submission_open','sealed_bid_received']
+  .forEach(t => es.addEventListener(t, e => add(t, JSON.parse(e.data))));
+
+async function poll(){
+  const r = await fetch('/api/v1/simulations/'+id);
+  const s = await r.json();
+  if (s.status === 'COMPLETED'){
+    document.getElementById('status').textContent = 'COMPLETED';
+    document.getElementById('status').className = 'done';
+    document.getElementById('reportLink').innerHTML =
+      '<a class="btn" href="/reports/'+id+'.html">Zobrazit report →</a>';
+    es.close();
+    return;
+  }
+  setTimeout(poll, 2000);
+}
+poll();
+</script>
+</body></html>

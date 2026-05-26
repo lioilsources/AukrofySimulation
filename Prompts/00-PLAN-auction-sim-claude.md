@@ -7,17 +7,25 @@
 
 ## 1. Cíle projektu
 
+> **Skutečný problém, který řešíme:** *„Málo lidí nesází, cena neroste, aukce není virální."*
+> Toto není jen akademické srovnání aukčních teorií — je to **rozhodovací nástroj pro návrh
+> aukčních mechanik**, který kvantifikuje, jaké uspořádání (typ aukce + virální mechanismy +
+> parametry) maximalizuje rovnováhu mezi profitem platformy a viralitou/engagementem,
+> a zároveň měří škody na účastnících (zejm. u Penny aukcí).
+
 ### Primární cíle
 - Simulovat tři typy aukcí (Dutch, Vickrey, Penny) se stejným poolem bidderů
-- Bidder agenti řízeni LLM s různými rolemi (gambler, cautious, interested, reseller, collector)
+- Bidder agenti řízeni LLM s různými rolemi (gambler, cautious, interested, reseller, collector, sniper, social)
 - Real-time běh s autentickými LLM rozhodnutími pro každý bid
-- Generovat srovnatelné metriky: profit platformy, profit prodávajícího, ztráty účastníků
+- Modelovat **virální mechanismy** (entry credit, referral, social proof, countdown extension, buy-it-now, streak) a měřit jejich dopad
+- Generovat srovnatelné metriky: profit platformy, profit prodávajícího, ztráty účastníků **+ engagement/viralita**
 - Produkovat insight-rich report s grafy, tabulkami a LLM-generated doporučeními
 
 ### Sekundární cíle
 - Demonstrovat exploitativní povahu Penny aukcí kvantitativně
+- **What-if optimalizace**: sweep jednoho parametru → křivka dopadu na metriky (nástroj pro provozovatele platformy)
 - Zachytit LLM reasoning u každého rozhodnutí pro post-mortem analýzu
-- Snadno rozšiřitelné o nové role a typy aukcí
+- Snadno rozšiřitelné o nové role, typy aukcí a virální mechanismy
 
 ### Out of scope (v1)
 - Více současně běžících aukcí stejného typu
@@ -166,6 +174,8 @@ auction-sim/
 │   ├── role_interested.md
 │   ├── role_reseller.md
 │   ├── role_collector.md
+│   ├── role_sniper.md
+│   ├── role_social.md
 │   ├── decision_dutch.md
 │   ├── decision_vickrey.md
 │   ├── decision_penny.md
@@ -190,6 +200,7 @@ CREATE TABLE simulations (
     name            TEXT NOT NULL,
     item_json       TEXT NOT NULL,        -- {name, retail_price, quantity, category}
     bidder_pool_json TEXT NOT NULL,       -- konfigurace poolu
+    viral_config_json TEXT,               -- aktivní virální mechanismy + parametry (sekce 10.5)
     auction_types   TEXT NOT NULL,        -- CSV: DUTCH,VICKREY,PENNY
     runs_per_type   INTEGER NOT NULL DEFAULT 1,
     status          TEXT NOT NULL,        -- PENDING, RUNNING, COMPLETED, FAILED
@@ -229,6 +240,10 @@ CREATE TABLE bidder_states (
     bids_placed     INTEGER NOT NULL DEFAULT 0,
     fees_paid       REAL NOT NULL DEFAULT 0,
     won             BOOLEAN NOT NULL DEFAULT FALSE,
+    active          BOOLEAN NOT NULL DEFAULT TRUE,   -- FALSE po LEAVE
+    left_at         DATETIME,                        -- čas opuštění aukce
+    entry_credit_received REAL NOT NULL DEFAULT 0,   -- viral: entry_credit
+    referral_earnings     REAL NOT NULL DEFAULT 0,   -- viral: referral_bonus
     updated_at      DATETIME NOT NULL
 );
 
@@ -238,8 +253,9 @@ CREATE TABLE bids (
     bidder_id       TEXT NOT NULL REFERENCES bidders(id),
     amount          REAL NOT NULL,
     fee_paid        REAL NOT NULL DEFAULT 0,
-    action          TEXT NOT NULL,        -- BID, PASS
+    action          TEXT NOT NULL,        -- BID, WAIT, LEAVE, BUY_NOW
     reasoning       TEXT,                 -- LLM zdůvodnění
+    confidence      REAL,                 -- 0.0–1.0
     llm_latency_ms  INTEGER,
     timestamp       DATETIME NOT NULL
 );
@@ -274,6 +290,8 @@ const (
     RoleInterested Role = "INTERESTED"
     RoleReseller   Role = "RESELLER"
     RoleCollector  Role = "COLLECTOR"
+    RoleSniper     Role = "SNIPER"   // čeká na poslední vteřiny
+    RoleSocial     Role = "SOCIAL"   // viralita: časté malé bidy, referraly
 )
 
 type Emotion string
@@ -427,7 +445,7 @@ CHARAKTERISTIKY:
 - V Dutch aukci čekáš dlouho — riskuješ ztrátu, ale dostáváš lepší cenu
 
 ROZHODOVÁNÍ:
-- Pokud current_price > valuation → vždy PASS
+- Pokud current_price > valuation → vždy WAIT (a při beznaději LEAVE)
 - Pokud emotion frustrated → ignoruj, drž se plánu
 - Reasoning by měl být kalkulovaný, číselný
 ```
@@ -457,12 +475,12 @@ Kupuješ pro další prodej. Aukce je pro tebe business transaction.
 CHARAKTERISTIKY:
 - Max valuation = retail_price × 0.6-0.7 (musíš mít marži)
 - Chladně kalkuluješ ROI
-- Penny aukce tě nezajímají — moc transakčních nákladů (fees)
+- Penny aukce tě nezajímají — moc transakčních nákladů (fees); často rovnou LEAVE
 - V Dutch dlouho čekáš na price drop
 - V Vickrey biduješ konzervativně pod true valuation
 
 ROZHODOVÁNÍ:
-- Pokud expected_margin < 30% → PASS
+- Pokud expected_margin < 30% → WAIT, případně LEAVE pokud cena trvale nad limitem
 - Emoce ignoruj zcela
 - Reasoning: vždy zmiňuj margin/ROI
 ```
@@ -481,9 +499,49 @@ CHARAKTERISTIKY:
 
 ROZHODOVÁNÍ:
 - Pokud budget umožňuje → bid
-- Pokud cena překročí budget → frustrated PASS s velkou nespokojeností
+- Pokud cena překročí budget → frustrated WAIT s velkou nespokojeností
 - Reasoning: emocionální vazba ke zboží
 ```
+
+### SNIPER (`prompts/role_sniper.md`)
+
+```markdown
+Jsi taktik. Tvá strategie je utajení a timing — udeřit na poslední chvíli.
+
+CHARAKTERISTIKY:
+- Dokud je časovač nad ~10 % celkového času (nebo cena daleko od konce), tvá akce je WAIT
+- Jakmile čas klesne do kritické zóny, okamžitě BID
+- Typický pro Penny a English aukce; ve Vickrey podáš jediný bid blízko true valuation
+- V Dutch čekáš na nízkou cenu, ale riskuješ, že tě někdo předběhne
+
+ROZHODOVÁNÍ:
+- Mimo kritickou zónu: vždy WAIT (nech ostatní vyčerpat se)
+- V kritické zóně: BID pokud cena < valuation, jinak LEAVE
+- Reasoning: kalkulovaný timing, nízká emocionalita
+```
+
+### SOCIAL (`prompts/role_social.md`)
+
+```markdown
+Jsi společenský a virální účastník. Budíš aktivitu a přivádíš lidi.
+
+CHARAKTERISTIKY:
+- Časté malé bidy pro udržení dynamiky (i pod racionální nutností)
+- Silně reaguješ na social proof signály ("X lidí přihazuje") — víc lidí = víc biduješ
+- Generuješ referraly: tvá aktivita přivádí nové bidery do poolu
+- V Penny aukci jsi motor engagementu (a tím i tržby platformy)
+- Máš strop, ale FOMO ho posouvá nahoru
+
+ROZHODOVÁNÍ:
+- Pokud social proof vysoký → BID i při marginální hodnotě
+- Pokud aukce "umírá" (nízká aktivita) → BID pro oživení
+- Reasoning: sociální, komunitní motivace
+```
+
+> **Numerické knoby:** Každá role nese laditelné parametry předané do promptu přes
+> `persona_json` — `risk_tolerance` (0–1), `social_factor` (0–1), `sunk_cost_sensitivity` (0–1).
+> Nemění engine, jen modulují system prompt a tím chování. Default hodnoty plynou z role,
+> ale jdou přebít při konfiguraci poolu.
 
 ---
 
@@ -510,12 +568,20 @@ type DecisionRequest struct {
 }
 
 type DecisionResponse struct {
-    Action    string  `json:"action"`     // BID, PASS
-    Amount    float64 `json:"amount,omitempty"` // Vickrey
-    Reasoning string  `json:"reasoning"`
-    LatencyMs int64
-    Raw       string
+    Action     string  `json:"action"`            // BID, WAIT, LEAVE
+    Amount     float64 `json:"amount,omitempty"`  // Vickrey / explicit bid
+    Reasoning  string  `json:"reasoning"`
+    Confidence float64 `json:"confidence"`        // 0.0–1.0, jistota agenta
+    LatencyMs  int64
+    Raw        string
 }
+
+// Akční model:
+//   BID   — přihodí (zaplatí fee/převezme leadership dle typu)
+//   WAIT  — vyčká, neutrácí, zůstává aktivní (dřívější "PASS")
+//   LEAVE — trvale opustí aukci; engine ho přestane oslovovat (mění active_bidders)
+// Pozn.: pokud je aktivní viral mechanismus buy_it_now, je povolena i akce BUY_NOW
+// (viz sekce 10.5) — engine ji validuje proti aktuální buy-now ceně.
 ```
 
 ### Prompt template strategie
@@ -542,6 +608,12 @@ AUKCE:
 - Aktuální leader: {{.LeaderName}}
 - Aktivních bidderů: {{.ActiveBidders}}
 
+SOCIAL PROOF (pokud aktivní mechanismus):
+- Aktivně přihazuje: {{.ActiveBidders}} lidí
+- Tempo bidů: {{.BidVelocity}} bidů/min
+- Tvůj entry credit k dispozici: {{.EntryCreditAvailable}} Kč
+{{if .BuyNowEnabled}}- Buy-it-now cena: {{.BuyNowPrice}} Kč{{end}}
+
 TVŮJ STAV:
 - Rozpočet zbývá: {{.BudgetRemaining}} Kč
 - Tvoje valuation: {{.Valuation}} Kč
@@ -552,10 +624,12 @@ TVŮJ STAV:
 
 ROZHODNI:
 1. BID — utratíš {{.BidFee}} Kč na fee, převezmeš leadership, timer reset
-2. PASS — počkáš, ušetříš fee, ale můžeš prohrát pokud timer dojde
+2. WAIT — počkáš, ušetříš fee, zůstaneš ve hře, ale můžeš prohrát pokud timer dojde
+3. LEAVE — trvale opustíš aukci (už tě engine nebude oslovovat){{if .BuyNowEnabled}}
+4. BUY_NOW — koupíš ihned za {{.BuyNowPrice}} Kč{{end}}
 
 ODPOVĚZ POUZE JSON:
-{"action": "BID" | "PASS", "reasoning": "<2-3 věty>"}
+{"action": "BID" | "WAIT" | "LEAVE"{{if .BuyNowEnabled}} | "BUY_NOW"{{end}}, "amount": <číslo|null>, "reasoning": "<2-3 věty>", "confidence": 0.0-1.0}
 ```
 
 ### Parsing
@@ -567,8 +641,9 @@ func parseDecision(raw string) (*DecisionResponse, error) {
     // 1. strip ```json ... ``` fences
     // 2. find first { ... last }
     // 3. unmarshal
-    // 4. validate action enum
-    // pokud failure → fallback PASS s log warning
+    // 4. validate action enum (BID | WAIT | LEAVE | BUY_NOW)
+    // 5. clamp confidence do [0,1]; chybějící → 0.5
+    // pokud failure → fallback WAIT s log warning (bezpečné: neutrácí, zůstává ve hře)
 }
 ```
 
@@ -589,8 +664,8 @@ func (p *Pool) RequestDecisions(ctx context.Context, event Event) []Decision {
         g.Go(func() error {
             d, err := b.Decide(gctx, event)
             if err != nil {
-                // timeout nebo error → default PASS
-                decisions[i] = Decision{BidderID: b.ID, Action: "PASS", Reasoning: "timeout"}
+                // timeout nebo error → default WAIT (bezpečné: neutrácí, zůstává ve hře)
+                decisions[i] = Decision{BidderID: b.ID, Action: "WAIT", Reasoning: "timeout"}
                 return nil
             }
             decisions[i] = d
@@ -613,9 +688,10 @@ POST   /api/v1/simulations
   body: {
     name: string,
     item: Item,
-    bidder_pool: [{role, count, budget_range, valuation_range}],
+    bidder_pool: [{role, count, budget_range, valuation_range, persona_overrides}],
     auction_types: ["DUTCH", "VICKREY", "PENNY"],
     auction_params: {dutch: {...}, vickrey: {...}, penny: {...}},
+    viral_config: {mechanisms: [...], entry_credit_amount, referral_pct, ...},  // viz sekce 10.5
     runs_per_type: 1
   }
   returns: 201 {simulation_id, status_url}
@@ -645,6 +721,17 @@ POST   /api/v1/auctions/{id}/bid           [internal, called by bidder pool]
 
 GET    /api/v1/simulations/{id}/report
   returns: full report JSON + html_url
+
+POST   /api/v1/analysis/compare
+  body: {item, bidder_pool, auction_params, viral_config, auction_types, runs_per_type}
+  spustí konfigurované typy aukcí se stejnými parametry a poolem
+  returns: srovnání metrik napříč typy (profit, engagement, viralita) + winner-by-metric
+
+POST   /api/v1/analysis/what-if
+  body: {base_config, parameter, range_from, range_to, steps}
+  sweep jednoho parametru (např. "entry_credit_amount", "penny.bid_fee", "bidder_pool.gambler.count")
+  engine spustí `steps` simulací s lineárně měněnou hodnotou
+  returns: {parameter, points: [{value, metrics}]}  → křivky metrik pro grafy
 
 GET    /reports/{simulation_id}.html       [static serve]
   HTML report s embedded grafy
@@ -699,6 +786,61 @@ simulation_progress {completed_auctions, total}
 
 ---
 
+## 10.5 Virální mechanismy
+
+Konfigurovatelná vrstva **nad** aukčním enginem — neimplementuje se uvnitř logiky jednotlivého
+typu aukce, ale jako hooks, které engine aplikuje při relevantních událostech. Cílem je modelovat,
+jak různé "engagement" mechaniky mění chování poolu, tržbu platformy i škody účastníků.
+
+### Go typy
+
+```go
+type ViralMechanism string
+const (
+    ViralEntryCredit        ViralMechanism = "entry_credit"
+    ViralReferralBonus      ViralMechanism = "referral_bonus"
+    ViralSocialProof        ViralMechanism = "social_proof"
+    ViralCountdownExtension ViralMechanism = "countdown_extension"
+    ViralBuyItNow           ViralMechanism = "buy_it_now"
+    ViralStreakBonus        ViralMechanism = "streak_bonus"
+)
+
+type ViralConfig struct {
+    Mechanisms          []ViralMechanism `json:"mechanisms"`
+    EntryCreditAmount   float64          `json:"entry_credit_amount,omitempty"`   // Kč po prvním bidu
+    ReferralPct         float64          `json:"referral_pct,omitempty"`          // % z final price referrerovi
+    SocialProofThreshold int             `json:"social_proof_threshold,omitempty"`// od kolika aktivních se zobrazuje
+    CountdownExtendS    time.Duration    `json:"countdown_extend_s,omitempty"`    // +Xs při late bidu
+    CountdownTriggerS   time.Duration    `json:"countdown_trigger_s,omitempty"`   // "late" = pod tento práh
+    BuyNowMultiplier    float64          `json:"buy_now_multiplier,omitempty"`    // násobek retail (default 1.3)
+    StreakDiscountPct   float64          `json:"streak_discount_pct,omitempty"`   // sleva za streak
+    StreakThreshold     int              `json:"streak_threshold,omitempty"`      // od kolika aukcí po sobě
+}
+```
+
+### Mechanismy a jak je engine aplikuje
+
+| Mechanismus | Trigger | Efekt | Dopad na metriky |
+|---|---|---|---|
+| `entry_credit` | první bid biddera v aukci | připíše kredit (`entry_credit_received`), sníží efektivní náklad vstupu | ↑ conversion, ↑ viral_cost |
+| `referral_bonus` | výhra biddera přivedeného referrerem | referrerovi `referral_pct` z final price (`referral_earnings`) | ↑ new_bidders_attracted, ↑ viral_cost |
+| `social_proof` | každý tick, pokud `active_bidders ≥ threshold` | vystaví `active_bidders` + `bid_velocity` do LLM kontextu | ↑ engagement (zejm. SOCIAL/GAMBLER role) |
+| `countdown_extension` | bid v posledních `CountdownTriggerS` | timer +`CountdownExtendS` (anti-sniping) — interaguje s Penny timer reset a English close | ↑ total_bids, ↑ duration, ↓ účinnost SNIPER |
+| `buy_it_now` | akce `BUY_NOW` agenta | okamžitá koupě za `retail × BuyNowMultiplier`, ukončí aukci | úniková cesta pro CAUTIOUS/COLLECTOR |
+| `streak_bonus` | bidder s ≥`StreakThreshold` aukcí po sobě (multi-auction/batch) | sleva `StreakDiscountPct` z ceny | ↑ retence napříč běhy |
+
+### Persistence
+- `simulations.viral_config_json` — konfigurace aktivních mechanismů (viz sekce 5).
+- `bidder_states.entry_credit_received`, `bidder_states.referral_earnings` — per-bidder tracking.
+- Reporter agreguje **`viral_cost`** = součet kreditů + referral payoutů (náklad platformy na engagement).
+
+### LLM kontext
+Decision šablony (sekce 8) dostávají navíc: `ActiveBidders`, `BidVelocity`, `EntryCreditAvailable`,
+`BuyNowEnabled`/`BuyNowPrice`. Tyto signály vidí agent jen pokud je příslušný mechanismus aktivní —
+jinak se do promptu nevkládají (čistý prompt, žádné matoucí nuly).
+
+---
+
 ## 11. Reporting
 
 ### Vypočítané metriky
@@ -718,7 +860,15 @@ type AuctionReport struct {
     Duration          time.Duration
     TotalBidsPlaced   int
     UniqueBidders     int
-    
+
+    // Engagement / viralita
+    UniqueActiveBidders  int        // kdo položil ≥1 bid
+    Conversion           float64    // UniqueActiveBidders / total v poolu
+    NewBiddersAttracted  int        // přivedení přes referral/social
+    ViralCoefficient     float64    // průměr nových bidderů na 1 aktivního
+    ViralCost            float64    // entry credits + referral payouts
+    BidVelocity          []float64  // bidů per časový bin (engagement v čase)
+
     PerBidder         []BidderReport
 }
 
@@ -736,14 +886,42 @@ type BidderReport struct {
 type SimulationReport struct {
     Simulation        Simulation
     AuctionReports    []AuctionReport
-    
+
+    // Batch agregace napříč runs_per_type (mean/median/variance/stddev per metrika)
+    Aggregates        map[AuctionType]AggregateReport
+
     CrossTypeMetrics  CrossTypeComparison
     RoleAnalysis      []RoleOutcomeByType
     
     LLMInsights       string  // generováno llm-lab
     Recommendations   []Recommendation
 }
+
+// AggregateReport drží statistiku jedné metriky napříč N běhy téhož typu.
+type MetricStats struct {
+    Mean, Median, Variance, StdDev, Min, Max float64
+}
+type AggregateReport struct {
+    Runs            int
+    FinalPrice      MetricStats
+    PlatformProfit  MetricStats
+    SellerProfit    MetricStats
+    TotalBids       MetricStats
+    Conversion      MetricStats
+    ViralCost       MetricStats
+    // ...per relevantní metrika
+}
 ```
+
+> **Batch běhy:** `runs_per_type` spouští N opakování téhož uspořádání; reporter agreguje
+> mean/median/variance/stddev. Grafy zobrazují průměr s error bars (případně box ploty).
+> Doporučení LLM (llm-lab) **váží viralitu/engagement vs. cenu i škody účastníků**, nikoli jen profit.
+
+> **Tick-pacing (`TICK_PACING`):** Engine zůstává real-time, ale tempo ticku je konfigurovatelné:
+> - `live` — wall-clock intervaly (Dutch tick 3–5s, Penny timer v sekundách) pro sledovaný běh ve frontendu.
+> - `fast` — žádný umělý `sleep`, ticky běží hned po sobě (omezeno jen LLM latencí) pro headless batch
+>   a `what-if` sweepy. Logika i pořadí událostí identické, mění se jen časování — sjednocuje "real-time"
+>   UX s rozumnou dobou dokončení mnoha běhů. (Není to deterministický replay, jen vypnutí sleep.)
 
 ### Charty (Chart.js)
 
@@ -754,6 +932,10 @@ type SimulationReport struct {
 5. **Bid frequency over time** (Penny) — line chart počet bidů per 10s bin
 6. **Emotion evolution** — stacked area chart per bidder pool průběhem aukce
 7. **Money flow Sankey** — odkud kam tečou peníze (bidders → platform/seller)
+8. **Engagement timeline** — bid velocity (bidů/bin) v čase, anotace virálních triggerů
+9. **Viral cost vs profit** — scatter: viral_cost × platform_profit per uspořádání
+10. **What-if sweep** — line chart metrik vs. hodnota proměného parametru (z `/analysis/what-if`)
+11. **Batch distribution** — box plot klíčových metrik napříč `runs_per_type` (variance výsledků)
 
 ### LLM-generated insights
 
@@ -799,6 +981,18 @@ DEFAULT_PENNY_TIMER_S=10
 DEFAULT_PENNY_BID_FEE=5.00
 DEFAULT_VICKREY_WINDOW_S=60
 DEFAULT_PLATFORM_FEE_PCT=5.0
+DEFAULT_RUNS_PER_TYPE=1
+TICK_PACING=live                # live | fast (fast pro headless batch / what-if)
+
+# Viral defaults
+DEFAULT_ENTRY_CREDIT=5.00
+DEFAULT_REFERRAL_PCT=10.0
+DEFAULT_SOCIAL_PROOF_THRESHOLD=3
+DEFAULT_COUNTDOWN_EXT_S=15
+DEFAULT_COUNTDOWN_TRIGGER_S=30
+DEFAULT_BUYNOW_MULT=1.3
+DEFAULT_STREAK_DISCOUNT_PCT=5.0
+DEFAULT_STREAK_THRESHOLD=3
 
 # Reports
 REPORTS_DIR=./reports
@@ -856,10 +1050,11 @@ clean:
 - [ ] Test: nahradit LLM dummy biddery skutečnými LLM agenty
 
 ### Fáze 3 — Bidder pool s rolemi (Den 3)
-- [ ] Role definitions + system prompts loading
-- [ ] Pool manager s configurable mix rolí
+- [ ] Role definitions + system prompts loading (7 rolí vč. SNIPER, SOCIAL)
+- [ ] Akční model BID/WAIT/LEAVE + confidence; LEAVE deaktivuje biddera
+- [ ] Pool manager s configurable mix rolí + numerické knoby (persona_overrides)
 - [ ] Emotion state machine
-- [ ] Parallel LLM calls s errgroup
+- [ ] Parallel LLM calls s errgroup (fallback WAIT)
 - [ ] Test: Vickrey s 10 biddery napříč rolemi
 
 ### Fáze 4 — Dutch (Den 4)
@@ -876,6 +1071,13 @@ clean:
 - [ ] LLM context pro Penny s emphasis na sunk cost
 - [ ] Test: full Penny run s 10 biddery, expect ~50+ bids
 
+### Fáze 5b — Virální vrstva (Den 5–6)
+- [ ] ViralConfig + ViralMechanism typy, parsing z `viral_config`
+- [ ] Engine hooks: entry_credit, countdown_extension, buy_it_now (BUY_NOW akce)
+- [ ] Cross-auction tracking: referral_bonus, streak_bonus
+- [ ] Social proof signály do LLM kontextu (active_bidders, bid_velocity)
+- [ ] Test: Penny s/bez virálních mechanismů — porovnat engagement & viral_cost
+
 ### Fáze 6 — Web UI (Den 6)
 - [ ] Layout template + Pico.css
 - [ ] Simulation setup form
@@ -883,12 +1085,14 @@ clean:
 - [ ] Bidder cards s real-time updates
 - [ ] Recent bids feed
 
-### Fáze 7 — Reporter (Den 7)
-- [ ] Metric calculations per auction
-- [ ] Cross-type comparison
-- [ ] Chart.js integration
+### Fáze 7 — Reporter + analýza (Den 7)
+- [ ] Metric calculations per auction (vč. engagement/viral metrik)
+- [ ] Batch agregace (mean/median/variance/stddev) přes runs_per_type
+- [ ] Cross-type comparison + `/analysis/compare`
+- [ ] `/analysis/what-if` sweep (TICK_PACING=fast) + sweep charty
+- [ ] Chart.js integration (engagement timeline, viral cost vs profit, box ploty)
 - [ ] HTML report template
-- [ ] LLM insight generation (llm-lab call)
+- [ ] LLM insight generation (llm-lab call) — váží viralitu vs. cenu i škody
 
 ### Fáze 8 — Polish (Den 8)
 - [ ] Error handling + retry logic
@@ -913,14 +1117,18 @@ Per demo run (1 simulace × 3 typy × 1 run):
 
 Na lokálním `llm-dev` (Gemma 4 31B) na DGX Spark: bez problému, vejde se do single session.
 
+> **Škálování s batch:** odhad ~700k je na **1 běh/typ**. Při `runs_per_type=N` škáluje lineárně
+> (10 běhů ≈ 7M tokenů); `what-if` sweep přidává `steps × per-sim`. Na lokálním llm-dev je to OK,
+> ale pro velké sweepy zvaž `TICK_PACING=fast` (kratší wall-clock, ne méně tokenů) a menší pool.
+
 ---
 
 ## 15. Rizika a mitigace
 
 | Riziko | Mitigace |
 |---|---|
-| LLM latence > tick interval (Dutch) | Tick 3-5s; pokud LLM nestihne, default PASS |
-| LLM vrátí invalid JSON | Fallback parser + PASS default + log warning |
+| LLM latence > tick interval (Dutch) | Tick 3-5s; pokud LLM nestihne, default WAIT |
+| LLM vrátí invalid JSON | Fallback parser + WAIT default + log warning |
 | Race condition při Dutch bidu | Single mutex + FIFO queue per aukce |
 | Penny aukce běží příliš dlouho | Hard cap max duration (např. 30 min) + emergency stop |
 | LLM "leaks" reasoning v reálné aukci by viděl ostatní | Reasoning ukládat, ale NEPOSÍLAT do promptů jiných bidderů |

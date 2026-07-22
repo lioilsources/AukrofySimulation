@@ -16,6 +16,22 @@ Topologie tří strojů:
 └─────────────┘
 ```
 
+## SSH přístup z macu (jednorázově)
+
+Deploy targety používají dedikované ed25519 klíče (`~/.ssh/auction-sim_nas`,
+`~/.ssh/auction-sim_spark`); privátní klíče nikdy neopouští mac:
+
+```bash
+make ssh-keys                                  # vygeneruje oba klíče (pokud chybí)
+make ssh-copy-id-nas   NAS_HOST=<user@nas>     # nahraje veřejný klíč na NAS
+make ssh-copy-id-spark SPARK_HOST=<user@spark> # nahraje veřejný klíč na SPARK
+make ssh-add                                   # přidá klíče do ssh-agenta (+ macOS keychain)
+```
+
+Pokud klíč neexistuje, deploy targety spadnou zpět na běžný ssh config/agenta —
+`-i` se přidává jen když soubor s klíčem existuje. Cesty lze přepsat proměnnými
+`SSH_KEY_NAS` / `SSH_KEY_SPARK`.
+
 ## NAS — web + databáze + Go engine
 
 Engine je jedna statická binárka (pure-Go SQLite, žádné CGO) zabalená v Docker image
@@ -47,8 +63,16 @@ nakopírovat `bin/linux-*/engine` + adresáře `prompts/` a `web/` + `.env`.
 
 ## SPARK — AI (LiteLLM, Python)
 
-Engine na Spark nic nedeployuje — jen volá jeho HTTPS endpoint (`LLM_BASE_URL`,
-default `https://llm.ol1n.com`) chráněný Cloudflare Access:
+LiteLLM proxy se nasazuje z adresáře `spark/` (compose + config šablona):
+
+```bash
+make deploy-spark SPARK_HOST=<user@spark> SPARK_DIR=/opt/auction-sim/litellm
+make spark-status SPARK_HOST=<user@spark>   # docker compose ps na Sparku
+```
+
+Reálný `config.yaml` (backendy modelů, klíče) žije jen na Sparku a rsync ho
+nepřepisuje — viz `spark/README.md`. Engine pak volá HTTPS endpoint
+(`LLM_BASE_URL`, default `https://llm.ol1n.com`) chráněný Cloudflare Access:
 
 - `llm-dev` (Gemma) — rozhodování bidderů, timeout 5 s, fallback WAIT
 - `llm-lab` — generování česky psaných insights do reportů, timeout 60 s

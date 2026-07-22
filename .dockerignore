@@ -3,6 +3,7 @@ bin/
 data/
 reports/
 docs/
+spark/
 .env
 .env.example
 *.md

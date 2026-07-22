@@ -92,7 +92,6 @@ func Compute(in RunInput) AuctionReport {
 			maxVal = b.Valuation
 			maxValBidderID = b.ID
 		}
-		bidsCount := countBids(in.Result.Bids, b.ID, auction.ActionBid) + countBids(in.Result.Bids, b.ID, auction.ActionBuyNow)
 		net := -b.Spent - b.FeesPaid
 		amountPaid := 0.0
 		if b.Won {
@@ -120,7 +119,6 @@ func Compute(in RunInput) AuctionReport {
 			FeesPaid: b.FeesPaid, AmountPaid: amountPaid, NetOutcome: net,
 			BudgetUsed: used, EndEmotion: b.Emotion, Won: b.Won,
 		})
-		_ = bidsCount
 	}
 
 	r.ViralCost = viralCost
@@ -133,14 +131,4 @@ func Compute(in RunInput) AuctionReport {
 		r.EfficiencyScore = 1
 	}
 	return r
-}
-
-func countBids(bids []auction.BidRecord, bidderID string, act auction.Action) int {
-	n := 0
-	for _, b := range bids {
-		if b.BidderID == bidderID && b.Action == act {
-			n++
-		}
-	}
-	return n
 }

@@ -32,6 +32,9 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// Ping ověří dostupnost databáze (healthcheck).
+func (s *Store) Ping() error { return s.db.Ping() }
+
 // Simulation je metadata simulace.
 type Simulation struct {
 	ID           string

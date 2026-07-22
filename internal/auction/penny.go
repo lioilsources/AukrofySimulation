@@ -68,9 +68,12 @@ func (e *Engine) runPenny(ctx context.Context) Result {
 			e.emit("leader_changed", map[string]any{"previous": prevLeader, "current": e.leaderID})
 		}
 
-		// reset timeru; countdown_extension prodlouží při bidu v kritické zóně
+		// reset timeru; countdown_extension prodlouží jen při bidu v kritické zóně
+		// (zbývající čas <= countdown_trigger_s; trigger 0 = prodlužuj vždy)
+		remaining := timer
 		timer = timerReset
-		if e.Viral.Has(ViralCountdownExtension) && e.Viral.CountdownExtendS > 0 {
+		if e.Viral.Has(ViralCountdownExtension) && e.Viral.CountdownExtendS > 0 &&
+			(e.Viral.CountdownTriggerS <= 0 || remaining <= e.Viral.CountdownTriggerS) {
 			timer += e.Viral.CountdownExtendS
 			e.emit("countdown_extended", map[string]any{"by_s": e.Viral.CountdownExtendS.Seconds()})
 		}

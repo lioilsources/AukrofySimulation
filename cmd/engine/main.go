@@ -33,6 +33,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if cfg.CFAccessClientID == "" || cfg.CFAccessSecret == "" {
+		log.Warn("CF Access credentials nejsou nastaveny — LLM volání selžou a bidderi budou pouze čekat (WAIT); nastav CF_ACCESS_CLIENT_ID a CF_ACCESS_CLIENT_SECRET")
+	}
+
 	srv, err := api.New(cfg, st, reg, "web")
 	if err != nil {
 		log.Error("init serveru", "err", err)

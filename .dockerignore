@@ -1,0 +1,14 @@
+.git
+bin/
+data/
+reports/
+docs/
+.env
+.env.example
+*.md
+!prompts/*.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+.github/
+.claude/

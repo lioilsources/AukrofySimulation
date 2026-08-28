@@ -29,7 +29,57 @@ LLM endpoint se nastavuje přes `.env` — viz `.env.example`.
 
 ---
 
-## Investor pitch
+## Investor pitch (English)
+
+**In one sentence:** a simulation platform that runs an auction past hundreds of
+LLM-driven buyers with different temperaments, to find out which format and
+which settings earn the most — before it goes live on real people.
+
+### Problem
+
+Anyone who runs auctions — marketplaces, estate sales, ad inventory — decides on
+format and parameters blind. A/B testing in production is slow, expensive and
+irreversible: a badly configured auction drives sellers away, and they don't
+come back. Classical economic models, meanwhile, assume a rational agent —
+precisely the assumption that does not hold for penny auctions.
+
+### Solution
+
+A Go engine with three implemented formats (Dutch, Vickrey, penny) and a
+population of agents whose decisions are driven by an LLM according to an
+assigned role and an emotion model. Every run is stored in SQLite as a complete
+event log, so it is reproducible; it can be watched live over SSE, and the
+reporter turns it into an HTML analysis.
+
+### Why it can win
+
+- **Irrationality is the feature.** The value isn't in simulating rational
+  bidders — that can be computed with an equation. It's that an LLM agent
+  assigned the "gambler" role behaves unpredictably in much the way a person
+  does, and that is exactly what makes penny auctions profitable.
+- **Reproducibility.** A complete event log means you compare configuration
+  against configuration, not impression against impression.
+- **Cost as a barrier for everyone else.** Simulating hundreds of agents through
+  a commercial API is prohibitively expensive. On owned GPU infrastructure (DGX
+  Spark) it is a tool you can actually run — this project is essentially
+  impossible without your own inference.
+
+### Status
+
+Working prototype, May–June 2026. The auction engine with tests, bidder pool,
+LLM client with parser, event bus with SSE, SQLite persistence, reporter and web
+interface are in place. It is not a product: there is no customer-facing layer,
+no validation against real auction data and no third-party API.
+
+### Next milestones
+
+Calibrating agent behaviour against real data from a live auction platform.
+Without validation it is an interesting toy; with it, a tool a marketplace will
+buy.
+
+---
+
+## Investor pitch (česky)
 
 **Jednou větou:** simulační platforma, ve které aukci prožene stovky
 LLM-řízených kupujících s různými povahami, aby se dalo zjistit, jaký formát

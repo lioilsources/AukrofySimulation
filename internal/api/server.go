@@ -55,6 +55,9 @@ func New(cfg config.Config, st *store.Store, reg *llm.Registry, webDir string) (
 func (s *Server) Routes(webDir string) http.Handler {
 	mux := http.NewServeMux()
 
+	// Health
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+
 	// API
 	mux.HandleFunc("POST /api/v1/simulations", s.handleCreateSimulation)
 	mux.HandleFunc("GET /api/v1/simulations/{id}", s.handleGetSimulation)

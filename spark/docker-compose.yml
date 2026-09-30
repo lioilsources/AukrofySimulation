@@ -1,0 +1,18 @@
+# LiteLLM proxy na DGX Spark — servíruje aliasy llm-dev a llm-lab pro auction-sim.
+# Reálný config.yaml žije jen na Sparku (deploy-spark ho nepřepisuje),
+# vychází z config.example.yaml.
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: auction-sim-litellm
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

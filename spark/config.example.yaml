@@ -1,0 +1,24 @@
+# Příklad LiteLLM configu pro auction-sim.
+# Na Sparku zkopíruj jako config.yaml a uprav podle skutečných backendů —
+# config.yaml se při deploy-spark NEPŘEPISUJE (drží lokální úpravy a klíče).
+
+model_list:
+  # rozhodování bidderů — rychlý model, engine má 5s timeout
+  - model_name: llm-dev
+    litellm_params:
+      model: openai/gemma-3-27b-it        # uprav dle skutečného serveru na Sparku
+      api_base: http://localhost:8000/v1   # např. vLLM / TGI / ollama endpoint
+      api_key: none
+
+  # generování insights do reportů — větší model, timeout 60 s
+  - model_name: llm-lab
+    litellm_params:
+      model: openai/gpt-oss-120b
+      api_base: http://localhost:8001/v1
+      api_key: none
+
+litellm_settings:
+  drop_params: true
+
+# Pozn.: Cloudflare Access (llm.ol1n.com → Spark:4000) řeší cloudflared tunel
+# mimo tento compose; engine posílá CF-Access-Client-Id/Secret hlavičky.

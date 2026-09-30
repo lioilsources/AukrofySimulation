@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ol1n/auction-sim/internal/store"
@@ -65,14 +67,24 @@ func (s *Server) handleGetSimulation(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	st := s.sims[id]
 	s.mu.Unlock()
-	if st == nil {
+	if st != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"simulation_id": id,
+			"status":        st.status,
+			"name":          st.req.Name,
+		})
+		return
+	}
+	// fallback do DB — simulace z běhů před restartem enginu
+	sim, err := s.store.GetSimulation(id)
+	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "neznámá simulace"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"simulation_id": id,
-		"status":        st.status,
-		"name":          st.req.Name,
+		"simulation_id": sim.ID,
+		"status":        sim.Status,
+		"name":          sim.Name,
 	})
 }
 
@@ -81,14 +93,40 @@ func (s *Server) handleGetReport(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	st := s.sims[id]
 	s.mu.Unlock()
-	if st == nil || st.status != "COMPLETED" {
-		writeJSON(w, http.StatusAccepted, map[string]string{"status": "not ready"})
+	if st != nil {
+		if st.status != "COMPLETED" {
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "not ready"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"report":   st.report,
+			"html_url": "/reports/" + id + ".html",
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"report":   st.report,
-		"html_url": "/reports/" + id + ".html",
-	})
+	// fallback do DB — po restartu už není report v paměti, ale HTML na disku ano
+	sim, err := s.store.GetSimulation(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "neznámá simulace"})
+		return
+	}
+	if sim.Status != "COMPLETED" {
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": sim.Status})
+		return
+	}
+	resp := map[string]any{"status": sim.Status}
+	if _, err := os.Stat(filepath.Join(s.cfg.ReportsDir, id+".html")); err == nil {
+		resp["html_url"] = "/reports/" + id + ".html"
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.Ping(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "db unavailable", "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {

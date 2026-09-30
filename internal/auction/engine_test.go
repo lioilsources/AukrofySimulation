@@ -128,6 +128,39 @@ func TestPennyFeesAndWinner(t *testing.T) {
 	}
 }
 
+func TestPennyCountdownExtensionOnlyInTriggerZone(t *testing.T) {
+	// První bid padne při plném timeru (mimo kritickou zónu) → bez prodloužení.
+	// Druhý bid padne až když zbývají <= 3 s → prodloužení o extend.
+	bids := 0
+	pool := newFakePool([]string{"A"}, 1000, func(s Snapshot, id string) Decision {
+		if bids == 0 || (bids == 1 && s.TimerRemaining <= 3*time.Second) {
+			bids++
+			return Decision{Action: ActionBid, Confidence: 0.9}
+		}
+		return Decision{Action: ActionWait}
+	})
+	extensions := 0
+	eng := &Engine{
+		AuctionID: "t", Type: Penny, Clock: FastClock{}, Parts: pool,
+		Params: AuctionParams{StartPrice: 1, BidFee: 1, PriceIncrement: 1,
+			TimerReset: 10 * time.Second, TickInterval: time.Second, MaxTicks: 100},
+		Viral: ViralConfig{Mechanisms: []ViralMechanism{ViralCountdownExtension},
+			CountdownExtendS: 7 * time.Second, CountdownTriggerS: 3 * time.Second},
+		Emit: func(e Event) {
+			if e.Type == "countdown_extended" {
+				extensions++
+			}
+		},
+	}
+	res := eng.Run(context.Background())
+	if extensions != 1 {
+		t.Fatalf("countdown_extended events = %d, čekáno 1 (jen bid v kritické zóně)", extensions)
+	}
+	if res.WinnerID != "A" {
+		t.Fatalf("vítěz = %q, čekáno A", res.WinnerID)
+	}
+}
+
 func TestBuyNowEndsAuction(t *testing.T) {
 	pool := newFakePool([]string{"A"}, 100000, func(s Snapshot, id string) Decision {
 		if s.BuyNowEnabled {

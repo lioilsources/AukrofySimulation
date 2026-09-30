@@ -11,10 +11,10 @@ Vývojářské detaily: viz [CLAUDE.md](CLAUDE.md).
 - **Tři aukční formáty:** Dutch, Vickrey a penny (`internal/auction/`)
 - **LLM-řízení dražitelé** s rolemi *sniper, gambler, collector, reseller,
   social, cautious, interested* a modelem emocí (`internal/bidder/`,
-  `internal/llm/`, prompty v `Prompts/`)
+  `internal/llm/`, prompty v `prompts/`)
 - **Úplný event log** v SQLite — každý běh je reprodukovatelný
 - **Živé sledování** přes SSE (`internal/events/`) a webové rozhraní (`web/`)
-- **HTML reporty** s agregacemi a insighty (`cmd/reporter`)
+- **HTML reporty** s agregacemi a insighty (`internal/reporter/`)
 
 ## Spuštění
 
@@ -24,8 +24,9 @@ make run            # build + spuštění simulace
 make test           # go test ./...
 ```
 
-Konfigurace agentů (strategie, parametry, počáteční rozpočet) je v YAML;
-LLM endpoint se nastavuje přes `.env` — viz `.env.example`.
+Veškerá konfigurace (LLM endpoint, defaulty simulací, pacing) se nastavuje přes
+env proměnné / `.env` — viz `.env.example`. Bidder pool se definuje na každou
+simulaci zvlášť ve webovém formuláři. Nasazení: `docs/DEPLOYMENT.md`.
 
 ---
 

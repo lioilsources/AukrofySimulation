@@ -63,6 +63,12 @@ nakopírovat `bin/linux-*/engine` + adresáře `prompts/` a `web/` + `.env`.
 
 ## SPARK — AI (LiteLLM, Python)
 
+> **Zastaralé (11/2026):** SPARK řídí fronta `spark-broker`. Vlastní LiteLLM ani
+> kontejnery na Sparku nenasazuj (`make deploy-spark`/`spark-status` nepoužívat),
+> LLM se bere ze sdílené AiStack gateway přes `sparkctl lease`. Projekt je na
+> SPARKu „cold“ (žádná okna); odblokování viz AiStack `PLAN-spark-scheduler.md` §6.
+> Pevná LLM okna z doby před brokerem neplatí.
+
 LiteLLM proxy se nasazuje z adresáře `spark/` (compose + config šablona):
 
 ```bash

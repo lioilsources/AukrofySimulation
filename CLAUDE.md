@@ -59,3 +59,4 @@ web/                # templates/ (setup, live view), static/
 - Prompts are loaded at startup from `prompts/` (lowercase — case-sensitive on Linux)
 - SQLite stores full event log for reproducibility; `GET /healthz` checks DB liveness
 - Deployment topology: NAS runs the engine container (see `docs/DEPLOYMENT.md`), DGX Spark serves the LLM endpoint, mac drives builds/deploys via Makefile
+- SPARK: only via `spark-broker` (global rules). `make deploy-spark` / `spark-status` and any fixed LLM windows are obsolete. Project is SPARK-"cold" (no windows); unblocking: AiStack `PLAN-spark-scheduler.md` §6

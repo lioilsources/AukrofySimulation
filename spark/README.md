@@ -1,5 +1,11 @@
 # SPARK — LiteLLM endpoint pro auction-sim
 
+> **Zastaralé (11/2026):** SPARK řídí fronta `spark-broker`. Vlastní LiteLLM ani
+> kontejnery na Sparku nenasazuj (`make deploy-spark`/`spark-status` nepoužívat),
+> LLM se bere ze sdílené AiStack gateway přes `sparkctl lease`. Projekt je na
+> SPARKu „cold“ (žádná okna); odblokování viz AiStack `PLAN-spark-scheduler.md` §6.
+> Pevná LLM okna z doby před brokerem neplatí.
+
 Tento adresář se nasazuje na DGX Spark přes `make deploy-spark` (rsync + `docker compose up -d`).
 Obsahuje LiteLLM proxy, která servíruje modelové aliasy `llm-dev` (rozhodování bidderů)
 a `llm-lab` (insights do reportů), na které se odkazuje `.env` enginu.

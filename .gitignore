@@ -3,3 +3,16 @@
 /data/*.db
 /reports/*.html
 .env
+# devconv:start
+.env.*
+!.env.example
+*.p8
+*.p12
+*.jks
+key.properties
+.claude/settings.local.json
+CLAUDE.local.md
+bin/
+*.test
+*.out
+# devconv:end
